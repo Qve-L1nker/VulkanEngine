@@ -1,0 +1,23 @@
+.vs
+
+# too lager file
+ThirdParty/Vulkan/Bin/dxcompiler.pdb
+ThirdParty/Vulkan/Bin/VkLayer_khronos_validation.pdb
+
+# model
+VulkanEngine/models/anno/
+VulkanEngine/models/yamato_dmc5*
+VulkanEngine/models/1.py
+VulkanEngine/models/ano by很ying的哈呵_by_Liope_1db705f03273474fb9ada2beaa87f891.zip
+VulkanEngine/models/FabConvert.com_model.zip
+
+# image
+VulkanEngine/textures/GEN.png
+
+# unused code
+VulkanEngine/shaders/Make-Spirv_Shaders.bat
+VulkanEngine/PlayerController.cpp
+VulkanEngine/PlayerController.h
+
+# out
+x64/
