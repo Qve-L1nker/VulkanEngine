@@ -21,3 +21,8 @@ VulkanEngine/PlayerController.h
 
 # out
 x64/
+
+# lib
+arm64/
+ThirdParty/*/lib/x86/
+!ThirdParty/*/lib/x64/

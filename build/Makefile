@@ -47,4 +47,4 @@ ResourcesManager.o: $(SRC_PATH)ResourcesManager.cpp
 
 clean:
 	del .\*.o
-	del ..\x64\Release\VulkanEngine.exe
+	del ..\VulkanEngine\VulkanEngine.exe
