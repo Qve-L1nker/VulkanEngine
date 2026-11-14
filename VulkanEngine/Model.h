@@ -308,6 +308,20 @@ public:
 			matrix(matrix), meshs(), Childrens(), anim_idx(-1), channel_idx(-1), bones_idx(-1), nodeid(nodeid), parent(parent) { }
 	};
 
+private:
+	// 模型帧更新时用于遍历结构树的栈节点结构体
+	struct stack_node
+	{
+		Node* node;
+
+		glm::mat4 mat;
+		uint32_t idx;
+
+		bool ret;
+
+		stack_node(Node* nodeptr, const glm::mat4& mat) : node(nodeptr), mat(mat), idx(0), ret(false) {}
+	};
+
 public:
 	Model() = default;
 	Model(const char* meshfile, const VkRenderer& vk_renderer, bool is_print_information = false, bool is_create_mesh = true);
@@ -357,6 +371,10 @@ public:
 
 	// 模型层级结构树(将所有节点放在内存连续的数组中，节点之间的连接用数组索引来代替指针)
 	std::vector<Node> structTree{};
+	// 模型层级结构树的最大深度
+	uint32_t structTree_depth = 0;
+	// 模型层级结构树的更新栈
+	std::vector<stack_node> structTree_update_stack{};
 
 	// 顶点网格数组
 	std::vector<ModelMesh> vertex_meshs;
@@ -380,7 +398,7 @@ public:
 	ModelAnimation* cur_animation = nullptr;
 
 private:
-
+	
 };
 
 #endif // !_MODEL_H

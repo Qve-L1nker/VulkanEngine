@@ -208,7 +208,9 @@ public:
 
 	/**
 	 * @brief 创建帧缓冲
-	 * @param render_pass - 用于帧缓冲区绑定的渲染通道
+	 * @param render_pass - 用于帧缓冲区绑定的渲染通道，通常会是后处理渲染通道
+	 * @param attachment_array(已弃用) - 交换链的帧缓冲区附件数组的数组，根据交换链图像的数量来决定有多少个附件数组
+	 * @param attachment_count(已弃用) - 帧缓冲区附件数组中的附件的数量
 	 * @return 成功则返回0，否则返回1
 	 */
 	int CreateSwapchainFrameBuffer(VkRenderPass render_pass);

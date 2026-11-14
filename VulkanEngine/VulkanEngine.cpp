@@ -54,10 +54,13 @@ int VulkanEngine::InitVulkan(SDL_Window* window)
 	vkGetPhysicalDeviceProperties(physicalDevice, &phy_pro);
 	SDL_Log(LOG_INFO("The push constant size of this physical device is:%d"), phy_pro.limits.maxPushConstantsSize);
 	SDL_Log(LOG_INFO("The max memory allocation count of this physical device is:%d"), phy_pro.limits.maxMemoryAllocationCount);
+
 	SDL_Log(LOG_INFO("The frame buffer color sample counts of this physical device is:%d"), phy_pro.limits.framebufferColorSampleCounts);
 	SDL_Log(LOG_INFO("The frame buffer depth sample counts of this physical device is:%d"), phy_pro.limits.framebufferDepthSampleCounts);
+
 	SDL_Log(LOG_INFO("The storage buffer size of this physical device is:%d"), phy_pro.limits.maxStorageBufferRange);
 	SDL_Log(LOG_INFO("The uniform buffer size of this physical device is:%d"), phy_pro.limits.maxUniformBufferRange);
+
 	SDL_Log(LOG_INFO("The max compute work group count of this physical device is:%d"), phy_pro.limits.maxComputeWorkGroupCount[0]);
 	SDL_Log(LOG_INFO("The max compute work group invocations of this physical device is:%d"), phy_pro.limits.maxComputeWorkGroupInvocations);
 	SDL_Log(LOG_INFO("The max compute work group size of this physical device is:%d"), phy_pro.limits.maxComputeWorkGroupSize[0]);
@@ -508,17 +511,17 @@ int VulkanEngine::CreateDepthResources()
 
 int VulkanEngine::CreateSwapchainFrameBuffer(VkRenderPass render_pass)
 {
-	VkFramebufferCreateInfo frame_buf_info;
+	VkFramebufferCreateInfo frame_buf_info{};
 
 	swapchain_frame_buffers.resize(swapchain_imageviews.size());
 	for (size_t i = 0; i < swapchain_frame_buffers.size(); i++)
 	{
-		std::array<VkImageView, 2> attachments = { swapchain_imageviews[i], depth_imgview };
-		frame_buf_info = {};
+		VkImageView attachments[] = { swapchain_imageviews[i] };
+
 		frame_buf_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 		frame_buf_info.renderPass = render_pass;
-		frame_buf_info.attachmentCount = static_cast<uint32_t>(attachments.size());
-		frame_buf_info.pAttachments = attachments.data();
+		frame_buf_info.attachmentCount = 1;
+		frame_buf_info.pAttachments = attachments;
 		frame_buf_info.width = swapchain_extent.width;
 		frame_buf_info.height = swapchain_extent.height;
 		frame_buf_info.layers = 1;
@@ -526,12 +529,12 @@ int VulkanEngine::CreateSwapchainFrameBuffer(VkRenderPass render_pass)
 		VkResult result = vkCreateFramebuffer(device, &frame_buf_info, nullptr, &swapchain_frame_buffers[i]);
 		if (result != VK_SUCCESS)
 		{
-			SDL_Log(LOG_ERROR("Failed to Create Framebuffer! (Error code: %d)"), result);
+			SDL_Log(LOG_ERROR("Failed to Create Swapchain Framebuffer! (Error code: %d)"), result);
 			return 1;
 		}
 	}
 
-	SDL_Log(LOG_SUCCESS("Successfully created Frame Buffer!"));
+	SDL_Log(LOG_SUCCESS("Successfully created Swapchain Frame Buffer!"));
 	return 0;
 }
 
@@ -756,12 +759,12 @@ int VulkanEngine::CreateDescriptorPool(VkDescriptorPool* pool_ptr)
 	pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 	pool_sizes[1].descriptorCount = 8;
 	pool_sizes[2].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	pool_sizes[2].descriptorCount = 384;
+	pool_sizes[2].descriptorCount = 200;
 
 	create_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
 	create_info.poolSizeCount = 3;
 	create_info.pPoolSizes = pool_sizes;
-	create_info.maxSets = 384 + 8 + 2;
+	create_info.maxSets = 200 + 8 + 2;
 
 	result = vkCreateDescriptorPool(device, &create_info, nullptr, pool_ptr);
 	if (result != VK_SUCCESS)

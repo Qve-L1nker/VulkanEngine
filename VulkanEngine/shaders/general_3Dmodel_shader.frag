@@ -85,8 +85,8 @@ void main()
 
     result += emissive.xyz;
 
-	result = result / (result + vec3(1.0));
-	result = pow(result, vec3(1.0/2.2));
+	// result = result / (result + vec3(1.0));
+	// result = pow(result, vec3(1.0/2.2));
 	outColor = vec4(result, diffuse.a);
 }
 

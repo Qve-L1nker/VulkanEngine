@@ -136,7 +136,7 @@ int main()
 		}
 
 		// 开始图形渲染通道
-		Global_vk_renderer.BeginRenderPass();
+		Global_vk_renderer.BeginGeneral3DRenderPass();
 		// 渲染绘制模型
 		//Global_vk_renderer.DrawModel(VirtualCity_model, camera);
 		Global_vk_renderer.DrawModel(*test_model.GetModel(), camera);
@@ -147,6 +147,14 @@ int main()
 		Global_vk_renderer.DrawHUD();
 		
 		// 结束图形渲染通道
+		Global_vk_renderer.EndRenderPass();
+
+
+		// 开始后处理渲染通道
+		Global_vk_renderer.BeginPostProcessRenderPass();
+
+		Global_vk_renderer.DrawPostProcess();
+		// 结束后处理渲染通道
 		Global_vk_renderer.EndRenderPass();
 
 		// 结束绘制，并呈现绘制结果

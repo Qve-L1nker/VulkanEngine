@@ -822,11 +822,11 @@ int ResourcesManager::GetNodeTreeMatrix(const aiScene* scene, Model& model)
 		bool ret;
 
 		stack_node(aiNode* node, const glm::mat4& matrix, uint32_t parentidx) :
-			node(node), matrix(matrix), treeidx(0), parentidx(parentidx), idx(0), ret(false) {
-		}
+			node(node), matrix(matrix), treeidx(0), parentidx(parentidx), idx(0), ret(false) {}
 	};
 
 	std::vector<stack_node> stack{};
+	uint32_t depth = 1, cur_depth = 1;
 
 
 	stack.emplace_back(scene->mRootNode, glm::mat4(1.f), -1);
@@ -840,10 +840,16 @@ int ResourcesManager::GetNodeTreeMatrix(const aiScene* scene, Model& model)
 		{
 			cur_mat = aiToGlm(aimat);
 		}
+		if (depth < cur_depth)
+		{
+			depth = cur_depth;
+		}
 		//cur_mat = current.matrix * cur_mat;
 
 		if (!current.ret)
 		{
+			cur_depth++;
+
 			current.treeidx = (uint32_t)model.structTree.size();
 
 			model.structTree.emplace_back(cur_mat, std::hash<aiString>()(current.node->mName), current.parentidx);
@@ -869,6 +875,8 @@ int ResourcesManager::GetNodeTreeMatrix(const aiScene* scene, Model& model)
 		}
 		else
 		{
+			cur_depth--;
+
 			current.idx += 1;
 			if (current.idx >= current.node->mNumChildren)
 			{
@@ -881,6 +889,10 @@ int ResourcesManager::GetNodeTreeMatrix(const aiScene* scene, Model& model)
 			stack.emplace_back(current.node->mChildren[current.idx], cur_mat, current.treeidx);
 		}
 	}
+
+	// 提前根据结构树的深度设置好递归栈的容量，避免扩容带来的开销
+	model.structTree_depth = depth;
+	model.structTree_update_stack.reserve(depth);
 
 	return 0;
 }

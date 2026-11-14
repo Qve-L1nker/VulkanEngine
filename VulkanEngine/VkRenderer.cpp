@@ -1,7 +1,5 @@
 ﻿#include <array>
 
-#include <vulkan/vulkan_extension_inspection.hpp>
-
 #include "Model.h"
 #include "Log_about.h"
 #include "VkRenderer.h"
@@ -47,13 +45,22 @@ int VkRenderer::Init(SDL_Window* window)
 	}
 	SDL_Log(LOG_SUCCESS("Successfully Created full screen rect vertex and index buffer"));
 
+
+
 	CreateGeneral3DModelRenderPass();
-	vk_engine.CreateSwapchainFrameBuffer(general_3Dmodel_renderpass);
+	CreatePostProcessRenderPass();
+
+	vk_engine.CreateSwapchainFrameBuffer(post_process_renderpass);
 
 	CreateGeneral3DModelRenderSystem();
+	CreatePostProcessRenderSystem();
 	CreateTextRenderSystem();
 
 	HUD_component.Create(*this);
+
+	// 创建通用3D渲染的离屏HDR图像的描述符集
+	// 因为使用的是 PostProcessRenderSystem 中的描述符布局，所以需在创建 PostProcessRenderSystem 后调用
+	CreateGeneral3DModelOffscreenHDRDescriptSet();
 
 	char temp_fps[8] = { 0 };
 	VkResult result;
@@ -109,8 +116,10 @@ void VkRenderer::Destroy()
 	HUD_component.Destroy(vk_engine);
 
 	DestroyTextRenderSystem();
+	DestroyPostProcessRenderSystem();
 	DestroyGeneral3DModelRenderSystem();
 
+	vkDestroyRenderPass(vk_engine.device, post_process_renderpass, nullptr);
 	vkDestroyRenderPass(vk_engine.device, general_3Dmodel_renderpass, nullptr);
 
 	vk_engine.DestroyBuffer(full_screen_rect_index, full_screen_rect_index_mem);
@@ -211,7 +220,7 @@ int VkRenderer::EndDraw()
 	return 0;
 }
 
-int VkRenderer::BeginRenderPass()
+int VkRenderer::BeginGeneral3DRenderPass()
 {
 	// 开始命令记录
 	std::array<VkClearValue, 2> clear_values{};
@@ -221,11 +230,46 @@ int VkRenderer::BeginRenderPass()
 	VkRenderPassBeginInfo render_pass_info{};
 	render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 	render_pass_info.renderPass = general_3Dmodel_renderpass;
-	render_pass_info.framebuffer = vk_engine.swapchain_frame_buffers[swapchain_image_index];
+	render_pass_info.framebuffer = offscreen_render_HDR_framebuf;
 	render_pass_info.renderArea.offset = { 0,0 };
 	render_pass_info.renderArea.extent = vk_engine.swapchain_extent;
 	render_pass_info.clearValueCount = static_cast<uint32_t>(clear_values.size());
 	render_pass_info.pClearValues = clear_values.data();
+
+	vkCmdBeginRenderPass(vk_engine.cmd_bufs[vk_engine.current_frame], &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+
+	// 绑定视图窗口和裁剪矩形
+	VkViewport& view_port = this->view_port;
+	view_port.x = 0;
+	view_port.y = 0;
+	view_port.width = static_cast<float>(vk_engine.swapchain_extent.width);
+	view_port.height = static_cast<float>(vk_engine.swapchain_extent.height);
+	view_port.minDepth = 0.f;
+	view_port.maxDepth = 1.f;
+
+	VkRect2D& scissor = this->scissor;
+	scissor.offset = { 0,0 };
+	scissor.extent = vk_engine.swapchain_extent;
+
+	vkCmdSetViewport(vk_engine.cmd_bufs[vk_engine.current_frame], 0, 1, &view_port);
+	vkCmdSetScissor(vk_engine.cmd_bufs[vk_engine.current_frame], 0, 1, &scissor);
+
+	return 0;
+}
+
+int VkRenderer::BeginPostProcessRenderPass()
+{
+	VkClearValue clear_values[1]{};
+	clear_values[0].color = { {0.f, 0.f, 0.f, 1.f} };
+
+	VkRenderPassBeginInfo render_pass_info{};
+	render_pass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+	render_pass_info.renderPass = post_process_renderpass;
+	render_pass_info.framebuffer = vk_engine.swapchain_frame_buffers[swapchain_image_index];
+	render_pass_info.renderArea.offset = { 0,0 };
+	render_pass_info.renderArea.extent = vk_engine.swapchain_extent;
+	render_pass_info.clearValueCount = 1;
+	render_pass_info.pClearValues = clear_values;
 
 	vkCmdBeginRenderPass(vk_engine.cmd_bufs[vk_engine.current_frame], &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
 
@@ -386,6 +430,29 @@ int VkRenderer::DrawText(VkDescriptorSet text_img_set, TextColor color, VkRect2D
 	return 0;
 }
 
+int VkRenderer::DrawPostProcess()
+{
+	// 绑定文本渲染管线
+	vkCmdBindPipeline(vk_engine.cmd_bufs[vk_engine.current_frame], VK_PIPELINE_BIND_POINT_GRAPHICS, post_process_render_system.pipeline);
+
+	// 绑定描述符集
+	VkDescriptorSet descriptor_sets[] = { offscreen_HDR_descript_set };
+	vkCmdBindDescriptorSets(vk_engine.cmd_bufs[vk_engine.current_frame], VK_PIPELINE_BIND_POINT_GRAPHICS, post_process_render_system.pipeline_layout, 0, 1, descriptor_sets, 0, nullptr);
+
+	// 绑定顶点缓冲区
+	VkBuffer vertex_buffers[] = { full_screen_rect_vertex };
+	VkDeviceSize offsets[] = { 0 };
+	vkCmdBindVertexBuffers(vk_engine.cmd_bufs[vk_engine.current_frame], 0, 1, vertex_buffers, offsets);
+
+	// 绑定索引缓冲区
+	vkCmdBindIndexBuffer(vk_engine.cmd_bufs[vk_engine.current_frame], full_screen_rect_index, 0, VK_INDEX_TYPE_UINT32);
+
+	// 记录绘制索引命令
+	vkCmdDrawIndexed(vk_engine.cmd_bufs[vk_engine.current_frame], full_screen_rect_index_size, 1, 0, 0, 0);
+
+	return 0;
+}
+
 int VkRenderer::DrawHUD()
 {
 	DrawText(HUD_component.HUD_texture_set, TextColor::White(), {{0,0},HUD_component.texture_extent}, {{0,0},HUD_component.texture_extent});
@@ -447,15 +514,17 @@ int VkRenderer::UpdateHUD(const char* fps)
 
 int VkRenderer::CreateGeneral3DModelRenderPass()
 {
-	VkAttachmentDescription color_attachment{};
-	color_attachment.format = vk_engine.swapchain_format;
-	color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-	color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-	color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-	color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-	color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	// 渲染通道附件
+	//// 3D模型渲染子通道的附件 ////
+	VkAttachmentDescription HDR_color_attachment{};
+	HDR_color_attachment.format = VK_FORMAT_R16G16B16A16_UNORM;
+	HDR_color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	HDR_color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	HDR_color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	HDR_color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	HDR_color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	HDR_color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	HDR_color_attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
 	VkAttachmentDescription depth_attachment{};
 	depth_attachment.format = vk_engine.FindDepthFormat();
@@ -466,46 +535,49 @@ int VkRenderer::CreateGeneral3DModelRenderPass()
 	depth_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 	depth_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 	depth_attachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+	//// /////////////////// ////
 
 	// 附件引用
-	VkAttachmentReference color_attachment_ref{};
-	color_attachment_ref.attachment = 0;
-	color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	VkAttachmentReference HDR_color_attachment_ref{};
+	HDR_color_attachment_ref.attachment = 0;
+	HDR_color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
 	VkAttachmentReference depth_attachment_ref{};
 	depth_attachment_ref.attachment = 1;
 	depth_attachment_ref.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
-	VkSubpassDescription subpass{};
-	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-	subpass.colorAttachmentCount = 1;
-	subpass.pColorAttachments = &color_attachment_ref;
-	subpass.pDepthStencilAttachment = &depth_attachment_ref;
+	VkSubpassDescription HDR_subpass{};
+	HDR_subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	HDR_subpass.colorAttachmentCount = 1;
+	HDR_subpass.pColorAttachments = &HDR_color_attachment_ref;
+	HDR_subpass.pDepthStencilAttachment = &depth_attachment_ref;
 
-	VkSubpassDependency dependency{};
-	dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-	dependency.dstSubpass = 0;
-	dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-	dependency.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-	dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-	dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	VkSubpassDependency dependency[2]{};
+	dependency[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency[0].dstSubpass = 0;
+	dependency[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	dependency[0].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	dependency[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	dependency[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-	/*dependency[1].srcSubpass = 0;
+	dependency[1].srcSubpass = 0;
 	dependency[1].dstSubpass = VK_SUBPASS_EXTERNAL;
 	dependency[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 	dependency[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 	dependency[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-	dependency[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;*/
+	dependency[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
-	std::array<VkAttachmentDescription, 2> attachments = { color_attachment, depth_attachment };
+	VkAttachmentDescription attachments[] = { HDR_color_attachment, depth_attachment };
+	VkSubpassDescription subpass[] = { HDR_subpass };
+
 	VkRenderPassCreateInfo renderpass_info{};
 	renderpass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-	renderpass_info.attachmentCount = static_cast<uint32_t>(attachments.size());
-	renderpass_info.pAttachments = attachments.data();
+	renderpass_info.attachmentCount = 2;
+	renderpass_info.pAttachments = attachments;
 	renderpass_info.subpassCount = 1;
-	renderpass_info.pSubpasses = &subpass;
-	renderpass_info.dependencyCount = 1;
-	renderpass_info.pDependencies = &dependency;
+	renderpass_info.pSubpasses = subpass;
+	renderpass_info.dependencyCount = 2;
+	renderpass_info.pDependencies = dependency;
 
 	VkResult result = vkCreateRenderPass(vk_engine.device, &renderpass_info, nullptr, &general_3Dmodel_renderpass);
 	if (result != VK_SUCCESS)
@@ -759,6 +831,54 @@ void VkRenderer::DestroyTextRenderSystem()
 
 int VkRenderer::CreateGeneral3DModelRenderSystem()
 {
+	VkResult result;
+
+	// 创建用于存放3D渲染绘制结果的HDR图像
+	if (vk_engine.CreateImage(vk_engine.swapchain_extent.width, vk_engine.swapchain_extent.height,
+		1,
+		VK_FORMAT_R16G16B16A16_UNORM,
+		VK_IMAGE_TILING_OPTIMAL,
+		VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+		VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+		&offscreen_HDR_img, &offscreen_HDR_memory))
+	{
+		SDL_Log(LOG_ERROR("Failed to Create Post Process HDR Image!"));
+		return 1;
+	}
+	if (vk_engine.CreateImageView(
+		offscreen_HDR_img,
+		VK_FORMAT_R16G16B16A16_UNORM,
+		1,
+		VK_IMAGE_ASPECT_COLOR_BIT,
+		&offscreen_HDR_view
+	))
+	{
+		SDL_Log(LOG_ERROR("Failed to Create Offscreen HDR Image view!"));
+		return 1;
+	}
+	SDL_Log(LOG_SUCCESS("Successfully Created Offscreen HDR Image and view!"));
+
+
+	// frame buffer
+	VkFramebufferCreateInfo frame_buf_info{};
+	VkImageView framebuf_attachments[2] = { offscreen_HDR_view, vk_engine.depth_imgview };
+	frame_buf_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+	frame_buf_info.renderPass = general_3Dmodel_renderpass;
+	frame_buf_info.attachmentCount = 2;
+	frame_buf_info.pAttachments = framebuf_attachments;
+	frame_buf_info.width = vk_engine.swapchain_extent.width;
+	frame_buf_info.height = vk_engine.swapchain_extent.height;
+	frame_buf_info.layers = 1;
+
+	result = vkCreateFramebuffer(vk_engine.device, &frame_buf_info, nullptr, &offscreen_render_HDR_framebuf);
+	if (result != VK_SUCCESS)
+	{
+		SDL_Log(LOG_ERROR("Failed to Create HUD Framebuffer! (Error code: %d)"), result);
+		return 1;
+	}
+	SDL_Log(LOG_SUCCESS("Successfully Created HUD Framebuffer! (Error code: %d)"), result);
+
+
 	if (CreateGeneral3DModelDescriptorLayout()) { return 1; }
 	if (CreateGeneral3DModelPipelineLayout()) { return 1; }
 	if (CreateGeneral3DModelPipeline()) { return 1; }
@@ -1110,7 +1230,325 @@ void VkRenderer::DestroyGeneral3DModelRenderSystem()
 	vkDestroyPipelineLayout(vk_engine.device, general_3Dmodel_render_system.pipeline_layout, nullptr);
 	vkDestroyDescriptorSetLayout(vk_engine.device, general_3Dmodel_render_system.descriptor_layout[0], nullptr);
 	vkDestroyDescriptorSetLayout(vk_engine.device, general_3Dmodel_render_system.descriptor_layout[1], nullptr);
+
+	vkDestroyFramebuffer(vk_engine.device, offscreen_render_HDR_framebuf, nullptr);
+
+	vkDestroyImage(vk_engine.device, offscreen_HDR_img, nullptr);
+	vkDestroyImageView(vk_engine.device, offscreen_HDR_view, nullptr);
+	vkFreeMemory(vk_engine.device, offscreen_HDR_memory, nullptr);
 }
+
+int VkRenderer::CreateGeneral3DModelOffscreenHDRDescriptSet()
+{
+	vk_engine.CreateDescriptorSets(post_process_render_system.descriptor_layout[0], vk_engine.descriptor_pool, &offscreen_HDR_descript_set);
+
+	VkDescriptorImageInfo img_infos[1]{};
+	img_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+	img_infos[0].imageView = offscreen_HDR_view;
+	img_infos[0].sampler = vk_engine.texture_sampler;
+
+	VkWriteDescriptorSet descriptor_writes{};
+	descriptor_writes.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+	descriptor_writes.dstSet = offscreen_HDR_descript_set;
+	descriptor_writes.dstBinding = 0;
+	descriptor_writes.dstArrayElement = 0;
+	descriptor_writes.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	descriptor_writes.descriptorCount = 1;
+	descriptor_writes.pImageInfo = img_infos;
+
+	vkUpdateDescriptorSets(vk_engine.device, 1, &descriptor_writes, 0, nullptr);
+
+	return 0;
+}
+
+
+int VkRenderer::CreatePostProcessRenderPass()
+{
+	// 渲染通道附件
+	//// 后处理阶段子通道的附件 ////
+	VkAttachmentDescription present_color_attachment{};
+	present_color_attachment.format = vk_engine.swapchain_format;
+	present_color_attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	present_color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+	present_color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+	present_color_attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	present_color_attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	present_color_attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	present_color_attachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	//// /////////////////// ////
+
+	// 附件引用
+	VkAttachmentReference present_color_attachment_ref{};
+	present_color_attachment_ref.attachment = 0;
+	present_color_attachment_ref.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	VkSubpassDescription post_process_subpass{};
+	post_process_subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	post_process_subpass.colorAttachmentCount = 1;
+	post_process_subpass.pColorAttachments = &present_color_attachment_ref;
+
+	VkSubpassDependency dependency[2]{};
+	dependency[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+	dependency[0].dstSubpass = 0;
+	dependency[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+	dependency[0].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+	dependency[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+	dependency[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT;
+
+	dependency[1].srcSubpass = 0;
+	dependency[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+	dependency[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+	dependency[1].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+	dependency[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+	VkAttachmentDescription attachments[] = { present_color_attachment };
+	VkSubpassDescription subpass[] = { post_process_subpass };
+
+	VkRenderPassCreateInfo renderpass_info{};
+	renderpass_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	renderpass_info.attachmentCount = 1;
+	renderpass_info.pAttachments = attachments;
+	renderpass_info.subpassCount = 1;
+	renderpass_info.pSubpasses = subpass;
+	renderpass_info.dependencyCount = 2;
+	renderpass_info.pDependencies = dependency;
+
+	VkResult result = vkCreateRenderPass(vk_engine.device, &renderpass_info, nullptr, &post_process_renderpass);
+	if (result != VK_SUCCESS)
+	{
+		SDL_Log(LOG_ERROR("Failed to Create general 3D model Render Pass!(Error code: %d)"), result);
+		return 1;
+	}
+	SDL_Log(LOG_SUCCESS("Successfully created general 3D model Render Pass!"));
+
+	post_process_render_system.render_pass = post_process_renderpass;
+
+	return 0;
+}
+
+int VkRenderer::CreatePostProcessRenderSystem()
+{
+	//VkResult result;
+
+	if (CreatePostProcessDescriptorLayout()) { return 1; }
+	if (CreatePostProcessPipelineLayout()) { return 1; }
+	if (CreatePostProcessPipeline()) { return 1; }
+
+	return 0;
+}
+
+int VkRenderer::CreatePostProcessDescriptorLayout()
+{
+	VkDescriptorSetLayoutBinding bindings[1]{};
+	VkDescriptorSetLayoutCreateInfo layout_info{};
+	VkResult result;
+
+	// HDR texture descriptor set
+	bindings[0].binding = 0;
+	bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	bindings[0].descriptorCount = 1;
+	bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+	bindings[0].pImmutableSamplers = nullptr;
+
+	layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+	layout_info.bindingCount = 1;
+	layout_info.pBindings = bindings;
+	result = vkCreateDescriptorSetLayout(vk_engine.device, &layout_info, nullptr, &post_process_render_system.descriptor_layout[0]);
+	if (result != VK_SUCCESS)
+	{
+		SDL_Log(LOG_ERROR("Failed to create descriptor set layout!(Error: %d)"), result);
+		return 1;
+	}
+	SDL_Log(LOG_SUCCESS("Successfully created Descriptor layout of post process HDR texture!"));
+
+	return 0;
+}
+
+int VkRenderer::CreatePostProcessPipelineLayout()
+{
+	VkDescriptorSetLayout des_layouts[] = { post_process_render_system.descriptor_layout[0] };
+	VkPipelineLayoutCreateInfo layout_info{};
+	layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+	layout_info.setLayoutCount = 1;
+	layout_info.pSetLayouts = des_layouts;
+	layout_info.pushConstantRangeCount = 0;
+	layout_info.pPushConstantRanges = nullptr;
+
+	VkResult result = vkCreatePipelineLayout(vk_engine.device, &layout_info, nullptr, &post_process_render_system.pipeline_layout);
+	if (result != VK_SUCCESS)
+	{
+		SDL_Log(LOG_ERROR("Failed to create post process stage pipeline layout!(Error code: %d)"), result);
+		return 1;
+	}
+	SDL_Log(LOG_SUCCESS("Successfully created post process stage Pipeline layout!"));
+
+	return 0;
+}
+
+int VkRenderer::CreatePostProcessPipeline()
+{
+	std::array<VkPipelineShaderStageCreateInfo, 2> shader_stages{};
+	VkResult result;
+
+	//// 着色器模块阶段
+	VkShaderModule vert_shader_module;
+	VkShaderModule frag_shader_module;
+	if (vk_engine.CreateShaderModule("shaders/post_process_shader.vert.spv", &vert_shader_module)) { return 1; }
+	if (vk_engine.CreateShaderModule("shaders/post_process_shader.frag.spv", &frag_shader_module)) { return 1; }
+
+	// vertex shader 顶点着色器模块
+	shader_stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	shader_stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+	shader_stages[0].module = vert_shader_module;
+	shader_stages[0].pName = "main";
+
+	// fragment shader 片段着色器模块
+	shader_stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+	shader_stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+	shader_stages[1].module = frag_shader_module;
+	shader_stages[1].pName = "main";
+
+	//// 动态状态
+	std::array<VkDynamicState, 2> dynamic_states = {
+		VK_DYNAMIC_STATE_VIEWPORT,          // 动态视图
+		VK_DYNAMIC_STATE_SCISSOR            // 动态裁剪矩形
+	};
+
+	VkPipelineDynamicStateCreateInfo dynamic_state_info{};
+	dynamic_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+	dynamic_state_info.dynamicStateCount = static_cast<uint32_t>(dynamic_states.size());
+	dynamic_state_info.pDynamicStates = dynamic_states.data();
+
+	//// 顶点输入
+	VkVertexInputBindingDescription vertex_binding_description{};
+	vertex_binding_description.binding = 0;
+	vertex_binding_description.stride = sizeof(VulkanEngine::TextVertex);
+	vertex_binding_description.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+	VkVertexInputAttributeDescription vertex_attribute_description[2]{};
+	vertex_attribute_description[0].binding = 0;
+	vertex_attribute_description[0].location = 0;
+	vertex_attribute_description[0].format = VK_FORMAT_R32G32_SFLOAT;
+	vertex_attribute_description[0].offset = 0;                                        // 0 - position
+
+	vertex_attribute_description[1].binding = 0;
+	vertex_attribute_description[1].location = 1;
+	vertex_attribute_description[1].format = VK_FORMAT_R32G32_SFLOAT;
+	vertex_attribute_description[1].offset = sizeof(glm::vec2);                       // 1 - tex_coord
+	VkPipelineVertexInputStateCreateInfo vertex_input_info{};
+	vertex_input_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+	vertex_input_info.vertexBindingDescriptionCount = 1;
+	vertex_input_info.pVertexBindingDescriptions = &vertex_binding_description;
+	vertex_input_info.vertexAttributeDescriptionCount = 2;
+	vertex_input_info.pVertexAttributeDescriptions = vertex_attribute_description;
+
+	//// 输入汇编
+	VkPipelineInputAssemblyStateCreateInfo input_assembly_info{};
+	input_assembly_info.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+	input_assembly_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;  // 每 3 个顶点组成的三角形，不复用
+	input_assembly_info.primitiveRestartEnable = VK_FALSE;
+
+	//// 视口和裁剪矩形
+	// 由于开启了动态视图和裁剪矩形，所以在记录命令缓冲区时设置视图和裁剪矩形即可
+	VkPipelineViewportStateCreateInfo view_port_state_info{};
+	view_port_state_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+	view_port_state_info.viewportCount = 1;
+	view_port_state_info.scissorCount = 1;
+
+	//// 光栅化器
+	VkPipelineRasterizationStateCreateInfo rasterizer{};
+	rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+	rasterizer.depthClampEnable = VK_FALSE;
+	rasterizer.rasterizerDiscardEnable = VK_FALSE;
+	rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+	rasterizer.lineWidth = 1.f;
+	rasterizer.cullMode = VK_CULL_MODE_NONE;  // 关闭背面剔除(VK_CULL_MODE_NONE) 开启(VK_CULL_MODE_BACK_BIT)
+	rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+	rasterizer.depthBiasEnable = VK_FALSE;
+	rasterizer.depthBiasConstantFactor = 0.f;
+	rasterizer.depthBiasClamp = 0.f;
+	rasterizer.depthBiasSlopeFactor = 0.f;
+
+	//// 多重采样
+	VkPipelineMultisampleStateCreateInfo multisampling{};
+	multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+	multisampling.sampleShadingEnable = VK_FALSE;
+	multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+	multisampling.minSampleShading = 1.f;
+	multisampling.pSampleMask = nullptr;
+	multisampling.alphaToCoverageEnable = VK_FALSE;
+	multisampling.alphaToOneEnable = VK_FALSE;
+
+	//// 深度和模板测试（后处理阶段不需要）
+
+	//// 颜色混合
+	VkPipelineColorBlendAttachmentState color_blend_attachment{};
+	color_blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+	color_blend_attachment.blendEnable = VK_FALSE;  // 不启用颜色混合
+	color_blend_attachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;  // 混合透明通道
+	color_blend_attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;  // color = src * src.alpha + dst * (1 - src.alpha)
+	color_blend_attachment.colorBlendOp = VK_BLEND_OP_ADD;
+	color_blend_attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+	color_blend_attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+	color_blend_attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+	VkPipelineColorBlendStateCreateInfo color_blend_state{};
+	color_blend_state.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+	color_blend_state.logicOpEnable = VK_FALSE;
+	color_blend_state.logicOp = VK_LOGIC_OP_COPY;
+	color_blend_state.attachmentCount = 1;
+	color_blend_state.pAttachments = &color_blend_attachment;
+	color_blend_state.blendConstants[0] = 0.f;
+	color_blend_state.blendConstants[1] = 0.f;
+	color_blend_state.blendConstants[2] = 0.f;
+	color_blend_state.blendConstants[3] = 0.f;
+
+	//// 创建管线
+	VkGraphicsPipelineCreateInfo create_info{};
+	create_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+	create_info.flags = VK_PIPELINE_CREATE_ALLOW_DERIVATIVES_BIT;
+	create_info.stageCount = static_cast<uint32_t>(shader_stages.size());
+	create_info.pStages = shader_stages.data();
+	// 管线功能
+	create_info.pVertexInputState = &vertex_input_info;
+	create_info.pInputAssemblyState = &input_assembly_info;
+	create_info.pViewportState = &view_port_state_info;
+	create_info.pRasterizationState = &rasterizer;
+	create_info.pMultisampleState = &multisampling;
+	//create_info.pDepthStencilState = &depth_stencil;
+	create_info.pColorBlendState = &color_blend_state;
+	create_info.pDynamicState = &dynamic_state_info;
+
+	create_info.layout = post_process_render_system.pipeline_layout;
+	create_info.renderPass = post_process_render_system.render_pass;
+	create_info.subpass = 0;  // 通用3D模型的渲染通道的子通道1
+
+	create_info.basePipelineHandle = VK_NULL_HANDLE;
+	create_info.basePipelineIndex = -1;
+
+	result = vkCreateGraphicsPipelines(vk_engine.device, VK_NULL_HANDLE, 1, &create_info, nullptr, &post_process_render_system.pipeline);
+	if (result != VK_SUCCESS)
+	{
+		SDL_Log(LOG_ERROR("Failed to Create post process PipeLine!(Error code: %d)"), result);
+		return 1;
+	}
+
+	SDL_Log(LOG_SUCCESS("Successfully created post process Pipeline!"));
+
+	// 创建完管线后即可销毁着色器模块
+	vkDestroyShaderModule(vk_engine.device, vert_shader_module, nullptr);
+	vkDestroyShaderModule(vk_engine.device, frag_shader_module, nullptr);
+
+	return 0;
+}
+
+void VkRenderer::DestroyPostProcessRenderSystem()
+{
+	vkDestroyPipeline(vk_engine.device, post_process_render_system.pipeline, nullptr);
+	vkDestroyPipelineLayout(vk_engine.device, post_process_render_system.pipeline_layout, nullptr);
+	vkDestroyDescriptorSetLayout(vk_engine.device, post_process_render_system.descriptor_layout[0], nullptr);
+}
+
 
 int VkRenderer::HUDComponent::Create(VkRenderer& vk_renderer)
 {

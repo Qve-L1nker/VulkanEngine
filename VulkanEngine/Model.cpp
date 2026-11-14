@@ -279,19 +279,9 @@ uint32_t Model::FindBone(aiBone* bone)
 
 void Model::UpdateStructTreeNodeAndAnimMatrix(Node& node)
 {
-	struct stack_node
-	{
-		Node* node;
-
-		glm::mat4 mat;
-		uint32_t idx;
-
-		bool ret;
-
-		stack_node(Node* nodeptr, const glm::mat4& mat) : node(nodeptr), mat(mat), idx(0), ret(false) {}
-	};
-
-	std::vector<stack_node> stack{};
+	// 清理递归栈
+	std::vector<stack_node>& stack = structTree_update_stack;
+	stack.clear();
 
 	stack.emplace_back(&node, glm::mat4(1.f));
 

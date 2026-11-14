@@ -7,4 +7,6 @@
 ..\..\ThirdParty\Vulkan\Bin\glslc HUD_shader.frag -o HUD_shader.frag.spv
 ..\..\ThirdParty\Vulkan\Bin\glslc general_3Dmodel_shader.vert -o general_3Dmodel_shader.vert.spv
 ..\..\ThirdParty\Vulkan\Bin\glslc general_3Dmodel_shader.frag -o general_3Dmodel_shader.frag.spv
+..\..\ThirdParty\Vulkan\Bin\glslc post_process_shader.vert -o post_process_shader.vert.spv
+..\..\ThirdParty\Vulkan\Bin\glslc post_process_shader.frag -o post_process_shader.frag.spv
 pause

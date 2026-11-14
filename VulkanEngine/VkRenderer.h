@@ -71,7 +71,12 @@ public:
 	 * @brief 开始默认的3D图形渲染通道
 	 * @return 成功返回0，否则返回1
 	 */
-	int BeginRenderPass();
+	int BeginGeneral3DRenderPass();
+	/**
+	 * @brief 开始后处理渲染通道
+	 * @return 成功返回0，否则返回1
+	 */
+	int BeginPostProcessRenderPass();
 	/**
 	 * @brief 结束渲染通道
 	 * @return 成功返回0，否则返回1
@@ -95,6 +100,9 @@ public:
 	 * @return 成功返回0，否则返回1
 	 */
 	int DrawText(VkDescriptorSet text_img_set, TextColor color, VkRect2D view, VkRect2D scissor);
+
+	// 后处理阶段
+	int DrawPostProcess();
 
 	// 绘制HUD(显示帧率)
 	int DrawHUD();
@@ -123,11 +131,21 @@ private:
 	int CreateTextRenderSystem();
 	void DestroyTextRenderSystem();
 
+	//// 构建通用3D模型渲染系统
 	int CreateGeneral3DModelRenderSystem();
 	int CreateGeneral3DModelDescriptorLayout();
 	int CreateGeneral3DModelPipelineLayout();
 	int CreateGeneral3DModelPipeline();
 	void DestroyGeneral3DModelRenderSystem();
+	int CreateGeneral3DModelOffscreenHDRDescriptSet();
+
+	//// 构建后处理阶段的渲染系统
+	int CreatePostProcessRenderPass();
+	int CreatePostProcessRenderSystem();
+	int CreatePostProcessDescriptorLayout();
+	int CreatePostProcessPipelineLayout();
+	int CreatePostProcessPipeline();
+	void DestroyPostProcessRenderSystem();
 
 	// HUD组件
 	struct HUDComponent
@@ -186,12 +204,26 @@ private:
 
 	// 通用3D模型渲染系统
 	VkRenderPass general_3Dmodel_renderpass = nullptr;
+	VkFramebuffer offscreen_render_HDR_framebuf = nullptr;
 	// ([0], set=1) - textures, ([1], set=2) - (storage buffer)bones matrixess
 	RenderSystem<2> general_3Dmodel_render_system{};
+	// 针对不同顶点结构的管线
 	VkPipeline vertex_pipeline = nullptr;
 	VkPipeline tangent_vertex_pipeline = nullptr;
 	VkPipeline bone_vertex_pipeline = nullptr;
 	VkPipeline bone_tangent_vertex_pipeline = nullptr;
+	// 离屏渲染图像，接收3D渲染得到的图像，用于后处理
+	VkImage offscreen_HDR_img = nullptr;
+	VkImageView offscreen_HDR_view = nullptr;
+	VkDeviceMemory offscreen_HDR_memory = nullptr;
+	VkDescriptorSet offscreen_HDR_descript_set = nullptr;
+
+
+	// 后处理渲染系统
+	VkRenderPass post_process_renderpass = nullptr;
+	// ([0], set=0) - HDR testure
+	RenderSystem<1> post_process_render_system{};
+
 
 	// 存储可用的交换链图像索引
 	uint32_t swapchain_image_index = 0;
