@@ -81,7 +81,7 @@ void main()
 		normal = normalize(TBN * normal);
 	}
 
-	vec3 result = PBR(diffuse.xyz, normal, mr.b, clamp(mr.g, 0.045, 1.0));
+	vec3 result = PBR(pow(diffuse.xyz, vec3(2.2)), normal, mr.b, clamp(mr.g, 0.045, 1.0));
 
     result += emissive.xyz;
 

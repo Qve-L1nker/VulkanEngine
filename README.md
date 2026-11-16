@@ -9,3 +9,8 @@
 - 在通用模型的片段着色器`general_3Dmodel_shader.frag`中实现了**PBR**渲染的部分，以及**HDR**色调输出
 - 实现了对法线贴图的支持
 - 实现了部分后处理效果（反色、泛光、高斯模糊）
+
+## 以 [Virtual City](https://github.com/KhronosGroupArchives/glTF-Sample-Models/tree/main/2.0/VC) 模型为例的效果图
+
+![VirtualCity](./VirtualCity.gif)
+> The Fox Model - <https://github.com/KhronosGroupArchives/glTF-Sample-Models/tree/main/2.0/Fox>

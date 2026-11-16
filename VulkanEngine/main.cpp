@@ -79,7 +79,7 @@ int main()
 	VirtualCity_model.TriggerAnimation();
 
 	TestModel test_model("models/gltf_test/Fox/Fox.gltf", Global_vk_renderer);
-	test_model.GetModel()->trans_mat = glm::scale(glm::mat4(1.f), glm::vec3(0.1f, 0.1f, 0.1f));
+	test_model.GetModel()->trans_mat = glm::scale(glm::mat4(1.f), glm::vec3(0.01f, 0.01f, 0.01f));
 
 	//Model model_yamato("models/yamato_dmc5/scene.gltf", Global_vk_renderer);
 	//model_yamato.position = glm::vec3(1.f, 0.f, 2.f);
